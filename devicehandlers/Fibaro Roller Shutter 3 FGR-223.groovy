@@ -1,6 +1,9 @@
 /**
  *  Device Handler for Fibaro Roller Shutter 3 (FGR-223)
  *
+ *  Created by danieleratti
+ *  Version 1.1
+ *  Based on the FGR-223 handler by philh30
  *  Based on the FGR-222 handler by Julien Bachmann
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -15,7 +18,7 @@
  */
 
 metadata {
-    definition (name: "Fibaro FGR-223", namespace: "philh30", author: "philh30", ocfDeviceType: "oic.d.blind", vid: "generic-shade") {
+    definition (name: "DR Fibaro FGR-223", namespace: "danieleratti", author: "danieleratti", ocfDeviceType: "oic.d.blind", vid: "generic-shade") {
         capability "Sensor"
         capability "Contact Sensor"
         capability "Actuator"
@@ -236,6 +239,21 @@ def zwaveEvent(physicalgraph.zwave.Command cmd) {
     log.debug("other event ${cmd}")
 }
 
+def zwaveEvent(physicalgraph.zwave.commands.multichannelv3.MultiChannelCmdEncap cmd) {
+    //def result = []
+    //log.debug("MultiChannelCmdEncap event ${cmd}")
+    //log.debug("DR: MultiChannelCmdEncap eventcommand ${cmd.command}")
+    //log.debug("DR: MultiChannelCmdEncap eventcommandClass ${cmd.commandClass}")
+    //log.debug("DR: MultiChannelCmdEncap eventparameter ${cmd.parameter}")
+    if(cmd.commandClass == 38 && cmd.command == 3) {
+        log.debug("DR: manually setted shade level ${cmd.parameter[0]}")
+        def level = correctLevel(cmd.parameter[0])
+        sendEvent(name: "level", value: level, unit: "%")
+        //result << createWindowShadeEvent(level) 
+    }
+    //return result
+}
+
 def zwaveEvent(physicalgraph.zwave.commands.meterv3.MeterReport cmd) {
     log.debug "Meter report: ${cmd.meterType} ${cmd.scale} ${cmd.scaledMeterValue}; Shade state: ${device.currentValue('windowShade')}; Shade level: ${device.currentValue('level')}"
     if (cmd.meterType == 1) {
@@ -334,19 +352,21 @@ def close() {
 }
 
 def privateOpen() {
-    secureSequence([
+    /*secureSequence([
     	//zwave.basicV1.basicSet(value: 0xFF),
         zwave.switchMultilevelV3.switchMultilevelSet(value: 99, dimmingDuration: 0x00),
     	zwave.switchMultilevelV3.switchMultilevelGet()
-    ], 2000)
+    ], 2000)*/
+    setLevel(100)
 }
 
 def privateClose() {
-    secureSequence([
+    /*secureSequence([
         //zwave.basicV1.basicSet(value: 0),
         zwave.switchMultilevelV3.switchMultilevelSet(value: 0, dimmingDuration: 0x00),
         zwave.switchMultilevelV3.switchMultilevelGet()
-    ], 2000)
+    ], 2000)*/
+    setLevel(0)
 }
 
 def presetPosition() {
@@ -377,12 +397,31 @@ def setLevel(level) {
         level = level - (offset ?: 0)
     }
 
-    log.debug("Set level ${level} - Shade state: ${device.currentValue('windowShade')}; Shade level: ${device.currentValue('level')}")
-    secureSequence([
+    log.debug("Set int level ${level} - Shade state: ${device.currentValue('windowShade')}; Shade level: ${device.currentValue('level')}")
+    
+    runIn(80, checkLevelTarget, [overwrite: true, data:[targetLevel: level]])
+
+    /*secureSequence([
         //zwave.basicV1.basicSet(value: level),
         zwave.switchMultilevelV3.switchMultilevelSet(value: level, dimmingDuration: 0x00),
         zwave.switchMultilevelV3.switchMultilevelGet()
+	], 10000)*/
+    secureSequence([
+        //zwave.basicV1.basicSet(value: level),
+        zwave.switchMultilevelV3.switchMultilevelSet(value: level, dimmingDuration: 0x00),
+        zwave.switchMultilevelV3.switchMultilevelGet(),
+        zwave.switchMultilevelV3.switchMultilevelGet()
 	], 10000)
+}
+
+def checkLevelTarget(data) {
+    log.debug("Check for level ${data.targetLevel} - Current level: ${device.currentValue('level')}")
+    if(Math.abs(data.targetLevel-device.currentValue('level')) > 3)
+    {
+        log.debug("Force level")
+        sendEvent(name: "level", value: data.targetLevel, unit: "%")
+        zwave.switchMultilevelV3.switchMultilevelGet()
+    }
 }
 
 def setLevel(String strLevel) {
