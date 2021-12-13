@@ -2,7 +2,7 @@
  *  Device Handler for Fibaro Roller Shutter 3 (FGR-223)
  *
  *  Created by danieleratti
- *  Version 1.1
+ *  Version 1.2
  *  Based on the FGR-223 handler by philh30
  *  Based on the FGR-222 handler by Julien Bachmann
  *
@@ -16,6 +16,8 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  */
+
+import groovy.json.JsonOutput
 
 metadata {
     definition (name: "DR Fibaro FGR-223", namespace: "danieleratti", author: "danieleratti", ocfDeviceType: "oic.d.blind", vid: "generic-shade") {
@@ -37,6 +39,7 @@ metadata {
 
         command "sync"
         command "stop"        
+        command "pause"        
         command "up"   
         command "down"   
 
@@ -126,6 +129,11 @@ metadata {
             }
         } // section
     }
+}
+
+def installed() {
+	log.debug("installed")
+    sendEvent(name: "supportedWindowShadeCommands", value: JsonOutput.toJson(["open", "close", "pause"]), displayed: false)
 }
 
 def parse(String description) {
@@ -249,6 +257,7 @@ def zwaveEvent(physicalgraph.zwave.commands.multichannelv3.MultiChannelCmdEncap 
         log.debug("DR: manually setted shade level ${cmd.parameter[0]}")
         def level = correctLevel(cmd.parameter[0])
         sendEvent(name: "level", value: level, unit: "%")
+        createWindowShadeEvent(level)
         //result << createWindowShadeEvent(level) 
     }
     //return result
@@ -303,8 +312,13 @@ def off() {
     close()
 }
 
+def pause() {
+    stop()
+}
+
 def stop() {
     log.debug "Stop - Shade state: ${device.currentValue('windowShade')}; Shade level: ${device.currentValue('level')}"
+    runIn(5, checkLevelTarget, [overwrite: true, data:[targetLevel: null]])
 	secureSequence([
     	zwave.switchMultilevelV3.switchMultilevelStopLevelChange(),
     	zwave.switchMultilevelV3.switchMultilevelGet()
@@ -415,12 +429,19 @@ def setLevel(level) {
 }
 
 def checkLevelTarget(data) {
-    log.debug("Check for level ${data.targetLevel} - Current level: ${device.currentValue('level')}")
-    if(Math.abs(data.targetLevel-device.currentValue('level')) > 3)
+    if(data == null)
     {
-        log.debug("Force level")
-        sendEvent(name: "level", value: data.targetLevel, unit: "%")
-        zwave.switchMultilevelV3.switchMultilevelGet()
+        log.debug("Skipped level check since paused")
+    }
+    else
+    {
+        log.debug("Check for level ${data.targetLevel} - Current level: ${device.currentValue('level')}")
+        if(Math.abs(data.targetLevel-device.currentValue('level')) > 3)
+        {
+            log.debug("Force level")
+            sendEvent(name: "level", value: data.targetLevel, unit: "%")
+            zwave.switchMultilevelV3.switchMultilevelGet()
+        }
     }
 }
 
@@ -444,6 +465,7 @@ def setLevel(String strLevel) {
 
 def configure() {
     log.debug("Configure roller shutter - Shade state: ${device.currentValue('windowShade')}; Shade level: ${device.currentValue('level')}")
+    log.debug("configure() Set parameter 150 to 1 [start calibration]")
     secureSequence([
         zwave.configurationV1.configurationSet(parameterNumber: 150, size: 1, scaledConfigurationValue: 2),  // start calibration
         zwave.switchMultilevelV3.switchMultilevelGet(),
@@ -455,9 +477,13 @@ def configure() {
 def sync() {
     log.debug("Sync roller shutter - Shade state: ${device.currentValue('windowShade')}; Shade level: ${device.currentValue('level')}")
     def cmds = []
+    sendEvent(name: "supportedWindowShadeCommands", value: JsonOutput.toJson(["open", "close", "pause"]), displayed: false)
     sendEvent(name: "syncStatus", value: "syncing", isStateChange: true)
     getParamsMd().findAll( {!it.readonly} ).each { // Exclude readonly parameters.
         if (settings."configParam${it.id}" != null) {
+            log.debug("sync() Set parameter ${it.id} of size ${it.size} to:")
+            log.debug(settings."configParam${it.id}")
+            log.debug(settings."configParam${it.id}".toInteger())
             cmds << secure(zwave.configurationV1.configurationSet(parameterNumber: it.id, size: it.size, scaledConfigurationValue: settings."configParam${it.id}".toInteger()))
             cmds << secure(zwave.configurationV1.configurationGet(parameterNumber: it.id))
         }
